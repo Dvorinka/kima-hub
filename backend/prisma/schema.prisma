@@ -355,6 +355,30 @@ model Play {
   user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+enum InteractionType {
+  PLAY
+  SKIP
+  LIKE
+  DISLIKE
+  SAVE
+  HIDE
+}
+
+model Interaction {
+  id           String          @id @default(cuid())
+  userId       String
+  trackId      String
+  type         InteractionType
+  weight       Float?
+  occurredAt   DateTime        @default(now())
+  completedMs  Int?
+  track         Track           @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([userId, occurredAt])
+}
+
 model PlaybackState {
   userId       String   @id
   playbackType String
@@ -578,6 +602,7 @@ model SystemSettings {
   registrationOpen            Boolean  @default(false)
   lidarrQualityProfileId      Int?
   lidarrMetadataProfileId     Int?
+  spotiflacEnabled            Boolean  @default(false)
 }
 
 model Track {
@@ -618,6 +643,7 @@ model Track {
   moodAcoustic                Float?
   moodElectronic              Float?
   danceabilityMl              Float?
+  popularity                  Float?                 @default(0)
   moodTags                    String[]
   essentiaGenres              String[]
   lastfmTags                  String[]              @default([])
@@ -643,6 +669,7 @@ model Track {
   cachedBy                    CachedTrack[]
   likedBy                     LikedTrack[]
   moodBuckets                 MoodBucket[]
+  interactions                Interaction[]
   plays                       Play[]
   playlistItems               PlaylistItem[]
   trackGenres                 TrackGenre[]
@@ -725,6 +752,9 @@ model User {
   likedTracks            LikedTrack[]
   listeningState         ListeningState[]
   notifications          Notification[]
+  interactions           Interaction[]
+  recControls            UserRecControls?
+  tasteProfile           UserTasteProfile?
   plays                  Play[]
   playbackState          PlaybackState?
   playlists              Playlist[]
@@ -896,4 +926,28 @@ enum ListenSource {
   DISCOVERY
   DISCOVERY_KEPT
   SUBSONIC
+}
+
+model UserTasteProfile {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  vector               Json
+  topGenres            Json     @default("{}")
+  interactionCount     Int      @default(0)
+  confidence           Float    @default(0)
+  explorationReadiness Float    @default(0)
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserRecControls {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  allowExplicit     Boolean  @default(true)
+  excludedTrackIds  String[] @default([])
+  excludedArtistIds String[] @default([])
+  excludedGenres    String[] @default([])
+  postponedTrackIds String[] @default([])
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

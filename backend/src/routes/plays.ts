@@ -3,6 +3,7 @@ import { logger } from "../utils/logger";
 import { requireAuth } from "../middleware/auth";
 import { prisma } from "../utils/db";
 import { z } from "zod";
+import { recordInteraction } from "../services/tasteProfile";
 
 const router = Router();
 
@@ -33,6 +34,9 @@ router.post("/", async (req, res) => {
                 trackId,
             },
         });
+
+        // Record interaction for taste profile (non-blocking)
+        recordInteraction(userId, trackId, "PLAY").catch(() => {});
 
         res.json(play);
     } catch (error) {

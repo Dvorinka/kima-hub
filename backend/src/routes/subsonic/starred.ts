@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../../utils/db";
 import { subsonicOk, subsonicError, SubsonicError } from "../../utils/subsonicResponse";
 import { mapSong, firstArtistGenre, wrap, parseRepeatedQueryParam } from "./mappers";
+import { recordInteraction } from "../../services/tasteProfile";
 
 export const starredRouter = Router();
 
@@ -63,12 +64,14 @@ starredRouter.all("/setRating.view", wrap(async (req, res) => {
     if (track) {
         if (rating === 0) {
             await prisma.likedTrack.deleteMany({ where: { userId, trackId: id } });
+            recordInteraction(userId, id, "DISLIKE").catch(() => {});
         } else {
             await prisma.likedTrack.upsert({
                 where: { userId_trackId: { userId, trackId: id } },
                 create: { userId, trackId: id },
                 update: {},
             });
+            recordInteraction(userId, id, "LIKE").catch(() => {});
         }
     }
 
@@ -88,6 +91,7 @@ starredRouter.all("/star.view", wrap(async (req, res) => {
                 update: {},
             })
             .catch(() => {}); // Absorbs FK violation if trackId doesn't exist
+        recordInteraction(userId, trackId, "LIKE").catch(() => {});
     }
     return subsonicOk(req, res);
 }));

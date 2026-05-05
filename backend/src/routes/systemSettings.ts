@@ -95,8 +95,11 @@ const systemSettingsSchema = z.object({
   soulseekConcurrentDownloads: z.number().min(1).max(10).optional(),
 
   // Download Preferences
-  downloadSource: z.enum(["soulseek", "lidarr"]).optional(),
-  primaryFailureFallback: z.enum(["none", "lidarr", "soulseek"]).optional(),
+  downloadSource: z.enum(["soulseek", "lidarr", "spotiflac"]).optional(),
+  primaryFailureFallback: z.enum(["none", "lidarr", "soulseek", "spotiflac"]).optional(),
+
+  // SpotiFLAC (zero-config lossless downloader)
+  spotiflacEnabled: z.boolean().optional(),
 
   // Server
   publicUrl: z.union([z.string().url(), z.literal("")]).optional(),
@@ -130,6 +133,7 @@ router.get("/", async (req, res) => {
           downloadRetryAttempts: 3,
           transcodeCacheMaxGb: 10,
           soulseekConcurrentDownloads: 4,
+          spotiflacEnabled: false,
         },
       });
     }

@@ -1725,6 +1725,7 @@ class SpotifyImportService {
                       albumTitle: album.albumName,
                       artistName: album.artistName,
                       mbid: album.albumMbid || undefined,
+                      spotifyAlbumId: album.spotifyAlbumId || undefined,
                       requestedTracks: album.tracksNeeded.map((t) => ({
                         title: t.title,
                       })),

@@ -13,6 +13,7 @@ import { simpleDownloadManager } from "./simpleDownloadManager";
 import { musicBrainzService } from "./musicbrainz";
 import { lastFmService } from "./lastfm";
 import { AcquisitionError, AcquisitionErrorType } from "./lidarr";
+import { spotiflacService } from "./spotiflac";
 import { distributedLock } from "../utils/distributedLock";
 import PQueue from "p-queue";
 import { downloadJobsTotal, downloadJobDuration, activeDownloads } from "../utils/metrics";
@@ -43,6 +44,8 @@ export interface AlbumAcquisitionRequest {
     artistName: string;
     mbid?: string;
     lastfmUrl?: string;
+    spotifyAlbumId?: string;
+    spotifyArtistId?: string;
     requestedTracks?: Array<{ title: string; position?: number }>;
 }
 
@@ -61,7 +64,7 @@ export interface TrackAcquisitionRequest {
 export interface AcquisitionResult {
     success: boolean;
     downloadJobId?: string;
-    source?: "soulseek" | "lidarr";
+    source?: "soulseek" | "lidarr" | "spotiflac";
     error?: string;
     errorType?: AcquisitionErrorType;
     isRecoverable?: boolean;
@@ -75,9 +78,9 @@ export interface AcquisitionResult {
  */
 interface DownloadBehavior {
     hasPrimarySource: boolean;
-    primarySource: "soulseek" | "lidarr" | null;
+    primarySource: "soulseek" | "lidarr" | "spotiflac" | null;
     hasFallbackSource: boolean;
-    fallbackSource: "soulseek" | "lidarr" | null;
+    fallbackSource: "soulseek" | "lidarr" | "spotiflac" | null;
 }
 
 class AcquisitionService {
@@ -127,9 +130,16 @@ class AcquisitionService {
             settings?.lidarrUrl &&
             settings?.lidarrApiKey
         );
+        const hasSpotiFLAC = settings?.spotiflacEnabled && await spotiflacService.isAvailable();
+
+        // Get available sources array
+        const availableSources: ("soulseek" | "lidarr" | "spotiflac")[] = [];
+        if (hasSoulseek) availableSources.push("soulseek");
+        if (hasLidarr) availableSources.push("lidarr");
+        if (hasSpotiFLAC) availableSources.push("spotiflac");
 
         // Case 1: No sources available
-        if (!hasSoulseek && !hasLidarr) {
+        if (availableSources.length === 0) {
             logger.error("[Acquisition] No download sources configured");
             return {
                 hasPrimarySource: false,
@@ -140,52 +150,63 @@ class AcquisitionService {
         }
 
         // Case 2: Only one source available - use it regardless of preference
-        if (hasSoulseek && !hasLidarr) {
-            logger.debug("[Acquisition] Source config: primary=soulseek, fallback=none (only source)");
+        if (availableSources.length === 1) {
+            const onlySource = availableSources[0];
+            logger.debug(`[Acquisition] Source config: primary=${onlySource}, fallback=none (only source)`);
             return {
                 hasPrimarySource: true,
-                primarySource: "soulseek",
+                primarySource: onlySource,
                 hasFallbackSource: false,
                 fallbackSource: null,
             };
         }
 
-        if (hasLidarr && !hasSoulseek) {
-            logger.debug("[Acquisition] Source config: primary=lidarr, fallback=none (only source)");
-            return {
-                hasPrimarySource: true,
-                primarySource: "lidarr",
-                hasFallbackSource: false,
-                fallbackSource: null,
-            };
-        }
+        // Case 3: Multiple sources available - respect user preference for primary
+        // Handle legacy values that might not include "spotiflac"
+        const validSources: ("soulseek" | "lidarr" | "spotiflac")[] = ["soulseek", "lidarr", "spotiflac"];
+        const userPrimary = validSources.includes(downloadSource as any) 
+            ? downloadSource as "soulseek" | "lidarr" | "spotiflac"
+            : "soulseek";
+            
+        // Check if user's preferred source is available
+        const primaryAvailable = availableSources.includes(userPrimary);
+        
+        // Find fallback candidates (sources that are available but not the primary)
+        const fallbackCandidates = availableSources.filter(s => s !== userPrimary);
+        const alternative = fallbackCandidates.length > 0 ? fallbackCandidates[0] : null;
 
-        // Case 3: Both available - respect user preference for primary
-        const userPrimary = downloadSource; // "soulseek" or "lidarr"
-        const alternative = userPrimary === "soulseek" ? "lidarr" : "soulseek";
-
-        // Auto-enable fallback if both sources are configured and no explicit setting
-        let useFallback =
-            primaryFailureFallback !== "none" &&
-            primaryFailureFallback === alternative;
+        // Auto-enable fallback if multiple sources are configured and no explicit setting
+        let useFallback = primaryFailureFallback !== "none" && 
+                         alternative !== null &&
+                         primaryFailureFallback === alternative;
 
         // Only auto-enable fallback if the setting is truly undefined/null (first-time users)
-        // "none" = explicit "Skip Track" choice, respect it (Fixes #68)
-        if (!useFallback && (primaryFailureFallback === undefined || primaryFailureFallback === null)) {
+        if (!useFallback && (primaryFailureFallback === undefined || primaryFailureFallback === null) && alternative) {
             useFallback = true;
             logger.debug(
-                `[Acquisition] Auto-enabled fallback: ${alternative} (both sources configured)`
+                `[Acquisition] Auto-enabled fallback: ${alternative} (multiple sources configured)`
             );
         }
 
+        // If primary not available but fallback is, use fallback as primary
+        if (!primaryAvailable && alternative) {
+            logger.debug(`[Acquisition] Primary ${userPrimary} not available, using ${alternative} as primary`);
+            return {
+                hasPrimarySource: true,
+                primarySource: alternative,
+                hasFallbackSource: fallbackCandidates.length > 1,
+                fallbackSource: fallbackCandidates.length > 1 ? fallbackCandidates[1] : null,
+            };
+        }
+
         logger.debug(
-            `[Acquisition] Source config: primary=${userPrimary}, fallback=${useFallback ? alternative : "none"}`
+            `[Acquisition] Source config: primary=${userPrimary}, fallback=${useFallback && alternative ? alternative : "none"}`
         );
 
         return {
-            hasPrimarySource: true,
+            hasPrimarySource: primaryAvailable,
             primarySource: userPrimary,
-            hasFallbackSource: useFallback,
+            hasFallbackSource: useFallback && alternative !== null,
             fallbackSource: useFallback ? alternative : null,
         };
     }
@@ -196,10 +217,10 @@ class AcquisitionService {
      */
     private async updateJobStatusText(
         jobId: string,
-        source: "lidarr" | "soulseek",
+        source: "lidarr" | "soulseek" | "spotiflac",
         attemptNumber: number
     ): Promise<void> {
-        const sourceLabel = source.charAt(0).toUpperCase() + source.slice(1);
+        const sourceLabel = source === "spotiflac" ? "SpotiFLAC" : source.charAt(0).toUpperCase() + source.slice(1);
         const statusText = `${sourceLabel} #${attemptNumber}`;
 
         const job = await prisma.downloadJob.findUnique({
@@ -222,6 +243,10 @@ class AcquisitionService {
                         source === "soulseek"
                             ? attemptNumber
                             : existingMetadata.soulseekAttempts || 0,
+                    spotiflacAttempts:
+                        source === "spotiflac"
+                            ? attemptNumber
+                            : existingMetadata.spotiflacAttempts || 0,
                     statusText,
                 },
             },
@@ -302,16 +327,17 @@ class AcquisitionService {
             settings?.lidarrUrl &&
             settings?.lidarrApiKey
         );
+        const spotiflacAvailable = settings?.spotiflacEnabled && await spotiflacService.isAvailable();
 
-        if (!soulseekAvailable && !lidarrAvailable) {
+        if (!soulseekAvailable && !lidarrAvailable && !spotiflacAvailable) {
             throw new ConfigurationError(
-                'No download sources configured. Please configure Soulseek or Lidarr in settings.'
+                'No download sources configured. Please configure Soulseek, Lidarr, or SpotiFLAC in settings.'
             );
         }
 
-        // MBID only required when Soulseek is unavailable (Lidarr needs it)
-        if (!request.mbid && !soulseekAvailable) {
-            throw new UserFacingError('Album MBID is required when Soulseek is not available', 400, 'INVALID_INPUT');
+        // MBID only required when Soulseek/SpotiFLAC is unavailable (Lidarr needs it)
+        if (!request.mbid && !soulseekAvailable && !spotiflacAvailable) {
+            throw new UserFacingError('Album MBID is required when Soulseek and SpotiFLAC are not available', 400, 'INVALID_INPUT');
         }
 
         // Verify artist name before acquisition
@@ -343,8 +369,8 @@ class AcquisitionService {
                 logger.debug(`[Acquisition] Trying primary: Soulseek`);
                 result = await this.acquireAlbumViaSoulseek(request, context);
 
-                // Fallback to Lidarr if Soulseek fails and fallback is configured
-                if (!result.success) {
+                // Fallback to other sources if Soulseek fails
+                if (!result.success && behavior.hasFallbackSource) {
                     logger.debug(
                         `[Acquisition] Soulseek failed: ${result.error || "unknown error"}`
                     );
@@ -352,32 +378,33 @@ class AcquisitionService {
                         `[Acquisition] Fallback available: hasFallback=${behavior.hasFallbackSource}, source=${behavior.fallbackSource}`
                     );
 
-                    if (
-                        behavior.hasFallbackSource &&
-                        behavior.fallbackSource === "lidarr" &&
-                        request.mbid
-                    ) {
-                        logger.debug(
-                            `[Acquisition] Attempting Lidarr fallback...`
-                        );
+                    if (behavior.fallbackSource === "lidarr" && request.mbid) {
+                        logger.debug(`[Acquisition] Attempting Lidarr fallback...`);
                         result = await this.acquireAlbumViaLidarr(request, context);
-                    } else {
-                        logger.debug(
-                            `[Acquisition] No fallback configured or fallback not Lidarr`
-                        );
+                    } else if (behavior.fallbackSource === "spotiflac") {
+                        logger.debug(`[Acquisition] Attempting SpotiFLAC fallback...`);
+                        result = await this.acquireAlbumViaSpotiFLAC(request, context);
                     }
                 }
             } else if (behavior.primarySource === "lidarr") {
                 if (!request.mbid) {
-                    // No MBID -- Lidarr requires it, skip directly to Soulseek
-                    logger.info(`[Acquisition] No MBID for "${request.albumTitle}", skipping Lidarr, trying Soulseek directly`);
-                    result = await this.acquireAlbumViaSoulseek(request, context);
+                    // No MBID -- Lidarr requires it, try other sources
+                    logger.info(`[Acquisition] No MBID for "${request.albumTitle}", skipping Lidarr`);
+                    if (soulseekAvailable) {
+                        logger.debug(`[Acquisition] Trying Soulseek instead...`);
+                        result = await this.acquireAlbumViaSoulseek(request, context);
+                    } else if (spotiflacAvailable) {
+                        logger.debug(`[Acquisition] Trying SpotiFLAC instead...`);
+                        result = await this.acquireAlbumViaSpotiFLAC(request, context);
+                    } else {
+                        throw new ConfigurationError("Lidarr requires MBID but no fallback source available");
+                    }
                 } else {
                     logger.debug(`[Acquisition] Trying primary: Lidarr`);
                     result = await this.acquireAlbumViaLidarr(request, context);
 
-                    // Fallback to Soulseek if Lidarr fails and fallback is configured
-                    if (!result.success) {
+                    // Fallback to other sources if Lidarr fails
+                    if (!result.success && behavior.hasFallbackSource) {
                         logger.debug(
                             `[Acquisition] Lidarr failed: ${result.error || "unknown error"}`
                         );
@@ -385,19 +412,34 @@ class AcquisitionService {
                             `[Acquisition] Fallback available: hasFallback=${behavior.hasFallbackSource}, source=${behavior.fallbackSource}`
                         );
 
-                        if (
-                            behavior.hasFallbackSource &&
-                            behavior.fallbackSource === "soulseek"
-                        ) {
-                            logger.debug(
-                                `[Acquisition] Attempting Soulseek fallback...`
-                            );
+                        if (behavior.fallbackSource === "soulseek") {
+                            logger.debug(`[Acquisition] Attempting Soulseek fallback...`);
                             result = await this.acquireAlbumViaSoulseek(request, context);
-                        } else {
-                            logger.debug(
-                                `[Acquisition] No fallback configured or fallback not Soulseek`
-                            );
+                        } else if (behavior.fallbackSource === "spotiflac") {
+                            logger.debug(`[Acquisition] Attempting SpotiFLAC fallback...`);
+                            result = await this.acquireAlbumViaSpotiFLAC(request, context);
                         }
+                    }
+                }
+            } else if (behavior.primarySource === "spotiflac") {
+                logger.debug(`[Acquisition] Trying primary: SpotiFLAC`);
+                result = await this.acquireAlbumViaSpotiFLAC(request, context);
+
+                // Fallback to other sources if SpotiFLAC fails
+                if (!result.success && behavior.hasFallbackSource) {
+                    logger.debug(
+                        `[Acquisition] SpotiFLAC failed: ${result.error || "unknown error"}`
+                    );
+                    logger.debug(
+                        `[Acquisition] Fallback available: hasFallback=${behavior.hasFallbackSource}, source=${behavior.fallbackSource}`
+                    );
+
+                    if (behavior.fallbackSource === "soulseek") {
+                        logger.debug(`[Acquisition] Attempting Soulseek fallback...`);
+                        result = await this.acquireAlbumViaSoulseek(request, context);
+                    } else if (behavior.fallbackSource === "lidarr" && request.mbid) {
+                        logger.debug(`[Acquisition] Attempting Lidarr fallback...`);
+                        result = await this.acquireAlbumViaLidarr(request, context);
                     }
                 }
             } else {
@@ -449,22 +491,9 @@ class AcquisitionService {
         context: AcquisitionContext
     ): Promise<AcquisitionResult[]> {
         logger.debug(
-            `\n[Acquisition] Acquiring ${requests.length} individual tracks via Soulseek`
+            `\n[Acquisition] Acquiring ${requests.length} individual tracks`
         );
 
-        // Check Soulseek availability
-        const soulseekAvailable = await soulseekService.isAvailable();
-        if (!soulseekAvailable) {
-            logger.error(
-                `[Acquisition] Soulseek not available for track downloads`
-            );
-            return requests.map(() => ({
-                success: false,
-                error: "Soulseek not configured",
-            }));
-        }
-
-        // Get music path
         const settings = await getSystemSettings();
         const musicPath = settings?.musicPath;
         if (!musicPath) {
@@ -475,61 +504,133 @@ class AcquisitionService {
             }));
         }
 
-        // Prepare tracks for batch download
-        const tracksToDownload = requests.map((req) => ({
-            artist: req.artistName,
-            title: req.trackTitle,
-            album: req.albumTitle || "Unknown Album",
-        }));
+        const soulseekAvailable = await soulseekService.isAvailable();
+        const spotiflacAvailable = settings?.spotiflacEnabled && await spotiflacService.isAvailable();
 
-        try {
-            // Use Soulseek batch download
-            const batchResult = await soulseekService.searchAndDownloadBatch(
-                tracksToDownload,
-                musicPath,
-                settings?.soulseekConcurrentDownloads ?? 4, // concurrency
-                context.signal
-            );
-
-            logger.debug(
-                `[Acquisition] Batch result: ${batchResult.successful}/${requests.length} tracks downloaded`
-            );
-
-            // Create individual results for each track
-            // Note: Batch doesn't return per-track success mapping, so we use error messages to determine failures
-            const results: AcquisitionResult[] = requests.map((req) => {
-                // Check if this specific track had an error in the batch result
-                const trackKey = `${req.artistName} - ${req.trackTitle}`;
-                const trackError = batchResult.errors.find((e) =>
-                    e.startsWith(trackKey)
-                );
-                const success = !trackError;
-
-                return {
-                    success,
-                    source: "soulseek" as const,
-                    tracksDownloaded: success ? 1 : 0,
-                    tracksTotal: 1,
-                    error: trackError || undefined,
-                };
-            });
-
-            return results;
-        } catch (error: any) {
-            if (error?.name === 'AbortError' || context.signal?.aborted) {
-                return requests.map(() => ({
-                    success: false,
-                    error: 'Import cancelled',
-                }));
-            }
-            logger.error(
-                `[Acquisition] Batch track download error: ${error.message}`
-            );
+        if (!soulseekAvailable && !spotiflacAvailable) {
+            logger.error(`[Acquisition] No download sources available for track downloads`);
             return requests.map(() => ({
                 success: false,
-                error: error.message,
+                error: "No download sources configured (Soulseek or SpotiFLAC required)",
             }));
         }
+
+        // Phase 1: Try Soulseek batch download for all tracks
+        const soulseekResults: (AcquisitionResult | null)[] = new Array(requests.length).fill(null);
+        const failedIndices: number[] = [];
+
+        if (soulseekAvailable) {
+            const tracksToDownload = requests.map((req) => ({
+                artist: req.artistName,
+                title: req.trackTitle,
+                album: req.albumTitle || "Unknown Album",
+            }));
+
+            try {
+                const batchResult = await soulseekService.searchAndDownloadBatch(
+                    tracksToDownload,
+                    musicPath,
+                    settings?.soulseekConcurrentDownloads ?? 4,
+                    context.signal
+                );
+
+                logger.debug(
+                    `[Acquisition] Soulseek batch: ${batchResult.successful}/${requests.length} tracks`
+                );
+
+                for (let i = 0; i < requests.length; i++) {
+                    const req = requests[i];
+                    const trackKey = `${req.artistName} - ${req.trackTitle}`;
+                    const trackError = batchResult.errors.find((e) => e.startsWith(trackKey));
+                    const success = !trackError;
+                    soulseekResults[i] = {
+                        success,
+                        source: "soulseek" as const,
+                        tracksDownloaded: success ? 1 : 0,
+                        tracksTotal: 1,
+                        error: trackError || undefined,
+                    };
+                    if (!success) failedIndices.push(i);
+                }
+            } catch (error: any) {
+                if (error?.name === 'AbortError' || context.signal?.aborted) {
+                    return requests.map(() => ({ success: false, error: 'Import cancelled' }));
+                }
+                logger.error(`[Acquisition] Soulseek batch error: ${error.message}`);
+                // All tracks failed via Soulseek
+                for (let i = 0; i < requests.length; i++) failedIndices.push(i);
+            }
+        } else {
+            // Soulseek not available, all tracks need SpotiFLAC
+            for (let i = 0; i < requests.length; i++) failedIndices.push(i);
+        }
+
+        // Phase 2: Try SpotiFLAC for failed tracks
+        if (failedIndices.length > 0 && spotiflacAvailable) {
+            logger.debug(`[Acquisition] Trying SpotiFLAC for ${failedIndices.length} failed tracks`);
+
+            for (const idx of failedIndices) {
+                const req = requests[idx];
+                try {
+                    // Strategy 1: Search Spotify by artist + track name
+                    const spotifyTrackId = await spotiflacService.searchSpotifyTrack(req.artistName, req.trackTitle);
+
+                    if (spotifyTrackId) {
+                        const dlResult = await spotiflacService.downloadTrack(spotifyTrackId, {
+                            outputDir: musicPath,
+                            preferSource: "auto",
+                        });
+                        soulseekResults[idx] = {
+                            success: dlResult.success,
+                            source: "spotiflac" as const,
+                            tracksDownloaded: dlResult.success ? 1 : 0,
+                            tracksTotal: 1,
+                            error: dlResult.error || undefined,
+                        };
+                        if (dlResult.success) continue;
+                    }
+
+                    // Strategy 2: Try ISRC lookup via MusicBrainz
+                    const mbRecording = await musicBrainzService.searchRecording(req.trackTitle, req.artistName);
+                    if (mbRecording?.trackMbid) {
+                        const isrc = await musicBrainzService.getRecordingIsrc(mbRecording.trackMbid);
+                        if (isrc) {
+                            const isrcResult = await spotiflacService.downloadTrackByISRC(isrc, {
+                                outputDir: musicPath,
+                                preferSource: "auto",
+                            });
+                            soulseekResults[idx] = {
+                                success: isrcResult.success,
+                                source: "spotiflac" as const,
+                                tracksDownloaded: isrcResult.success ? 1 : 0,
+                                tracksTotal: 1,
+                                error: isrcResult.error || undefined,
+                            };
+                            if (isrcResult.success) continue;
+                        }
+                    }
+
+                    // Both strategies failed
+                    if (!soulseekResults[idx]) {
+                        soulseekResults[idx] = {
+                            success: false,
+                            error: `Track not found on Spotify, Qobuz, or Tidal`,
+                        };
+                    }
+                } catch (e: any) {
+                    logger.debug(`[Acquisition] SpotiFLAC track fallback failed: ${e.message}`);
+                    if (!soulseekResults[idx]) {
+                        soulseekResults[idx] = {
+                            success: false,
+                            error: e.message,
+                        };
+                    }
+                }
+            }
+        }
+
+        // Fill any remaining nulls with failures
+        return soulseekResults.map(r => r || { success: false, error: "No download source available" });
     }
 
     /**
@@ -820,6 +921,193 @@ class AcquisitionService {
                 );
             }
             return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Acquire album via SpotiFLAC (Spotify → Qobuz/Tidal download)
+     * Gets Spotify album and downloads via high-quality sources
+     *
+     * @param request - Album to acquire
+     * @param context - Tracking context
+     * @returns Acquisition result
+     */
+    private async acquireAlbumViaSpotiFLAC(
+        request: AlbumAcquisitionRequest,
+        context: AcquisitionContext
+    ): Promise<AcquisitionResult> {
+        logger.debug(
+            `[Acquisition/SpotiFLAC] Downloading: ${request.artistName} - ${request.albumTitle}`
+        );
+
+        let job: any;
+        try {
+            // Create download job
+            job = await this.createDownloadJob(request, context);
+
+            // Calculate attempt number (existing spotiflac attempts + 1)
+            const jobMetadata = (job.metadata as any) || {};
+            const spotiflacAttempts = (jobMetadata.spotiflacAttempts || 0) + 1;
+            await this.updateJobStatusText(job.id, "spotiflac", spotiflacAttempts);
+
+            // Get music path for output
+            const settings = await getSystemSettings();
+            const musicPath = settings?.musicPath || "/music";
+
+            // Build sanitized paths
+            const sanitizedArtist = request.artistName.replace(/[<>:"/\\|?*]/g, "_").substring(0, 100);
+            const sanitizedAlbum = request.albumTitle.replace(/[<>:"/\\|?*]/g, "_").substring(0, 100);
+            const albumDir = `${musicPath}/${sanitizedArtist}/${sanitizedAlbum}`;
+
+            // For SpotiFLAC, we need the Spotify album ID
+            // Strategy: 1) Use provided Spotify ID  2) Search Spotify by name  3) Use UPC from MusicBrainz
+            
+            let spotifyAlbumId = request.spotifyAlbumId || jobMetadata.spotifyAlbumId || jobMetadata.spotifyId;
+            
+            if (!spotifyAlbumId) {
+                // Strategy 2: Search Spotify by artist + album name
+                logger.debug(`[Acquisition/SpotiFLAC] No Spotify ID provided, searching Spotify by name...`);
+                
+                try {
+                    spotifyAlbumId = await spotiflacService.searchSpotifyAlbum(request.artistName, request.albumTitle);
+                    if (spotifyAlbumId) {
+                        logger.debug(`[Acquisition/SpotiFLAC] Found Spotify album ID: ${spotifyAlbumId}`);
+                    }
+                } catch (e: any) {
+                    logger.debug(`[Acquisition/SpotiFLAC] Spotify search failed: ${e.message}`);
+                }
+            }
+
+            // Strategy 3: If still no Spotify ID, try downloading by UPC from MusicBrainz
+            if (!spotifyAlbumId && request.mbid) {
+                logger.debug(`[Acquisition/SpotiFLAC] No Spotify ID found, trying MusicBrainz UPC lookup...`);
+                try {
+                    // Get releases from the release group, then get the first release's barcode
+                    const rgDetails = await musicBrainzService.getReleaseGroupDetails(request.mbid);
+                    const releases = rgDetails?.releases || [];
+                    const officialRelease = releases.find((r: any) => r.status === "Official") || releases[0];
+                    
+                    if (officialRelease?.id) {
+                        const releaseData = await musicBrainzService.getRelease(officialRelease.id);
+                        const barcode = releaseData?.barcode;
+                        if (barcode) {
+                            logger.debug(`[Acquisition/SpotiFLAC] Found UPC/barcode: ${barcode}, trying Qobuz...`);
+                            const upcResult = await spotiflacService.downloadAlbumByUPC(barcode, {
+                                outputDir: albumDir,
+                                quality: undefined,
+                                preferSource: "auto",
+                                jobId: job.id,
+                            });
+                            if (upcResult.successful > 0) {
+                                const successThreshold = Math.ceil(upcResult.total * 0.5);
+                                const isSuccess = upcResult.successful >= successThreshold;
+                                await this.updateJobStatus(job.id, isSuccess ? "completed" : "failed",
+                                    isSuccess ? undefined : `Only ${upcResult.successful}/${upcResult.total} tracks via UPC`);
+                                return {
+                                    success: isSuccess,
+                                    source: "spotiflac",
+                                    downloadJobId: job.id,
+                                    tracksDownloaded: upcResult.successful,
+                                    tracksTotal: upcResult.total,
+                                    error: isSuccess ? undefined : `Only ${upcResult.successful}/${upcResult.total} tracks via UPC`,
+                                };
+                            }
+                        }
+                    }
+                } catch (e: any) {
+                    logger.debug(`[Acquisition/SpotiFLAC] UPC download failed: ${e.message}`);
+                }
+            }
+
+            if (!spotifyAlbumId) {
+                await this.updateJobStatus(job.id, "failed",
+                    `Could not find "${request.albumTitle}" by "${request.artistName}" on Spotify or Qobuz (UPC). Try providing a Spotify album URL.`
+                );
+                return {
+                    success: false,
+                    error: `Could not find album on Spotify or Qobuz. Try providing a Spotify URL.`,
+                };
+            }
+
+            // Start the SpotiFLAC download
+            logger.debug(`[Acquisition/SpotiFLAC] Starting download for album: ${spotifyAlbumId}`);
+            
+            const batchResult = await spotiflacService.downloadAlbum(spotifyAlbumId, {
+                outputDir: albumDir,
+                quality: undefined, // Use default quality from config
+                preferSource: "auto",
+                jobId: job.id,
+            });
+
+            if (batchResult.successful > 0) {
+                const successThreshold = Math.ceil(batchResult.total * 0.5); // At least 50% of tracks
+                const isSuccess = batchResult.successful >= successThreshold;
+
+                logger.debug(
+                    `[Acquisition/SpotiFLAC] Downloaded ${batchResult.successful}/${batchResult.total} tracks (threshold: ${successThreshold})`
+                );
+
+                // Update job status
+                await this.updateJobStatus(
+                    job.id,
+                    isSuccess ? "completed" : "failed",
+                    isSuccess ? undefined : `Only ${batchResult.successful}/${batchResult.total} tracks downloaded`
+                );
+
+                // Update metadata with track counts
+                await prisma.downloadJob.update({
+                    where: { id: job.id },
+                    data: {
+                        metadata: {
+                            ...jobMetadata,
+                            tracksDownloaded: batchResult.successful,
+                            tracksTotal: batchResult.total,
+                            outputDir: batchResult.outputDir,
+                        },
+                    },
+                });
+
+                return {
+                    success: isSuccess,
+                    source: "spotiflac",
+                    downloadJobId: job.id,
+                    tracksDownloaded: batchResult.successful,
+                    tracksTotal: batchResult.total,
+                    error: isSuccess ? undefined : `Only ${batchResult.successful}/${batchResult.total} tracks downloaded`,
+                };
+            } else {
+                logger.error(`[Acquisition/SpotiFLAC] No tracks downloaded`);
+                
+                await this.updateJobStatus(
+                    job.id,
+                    "failed",
+                    "No tracks found or downloaded from SpotiFLAC sources"
+                );
+
+                return {
+                    success: false,
+                    error: "No tracks found or downloaded from SpotiFLAC sources",
+                };
+            }
+        } catch (error: any) {
+            logger.error(`[Acquisition/SpotiFLAC] Error: ${error.message}`);
+            
+            if (job) {
+                await this.updateJobStatus(
+                    job.id,
+                    "failed",
+                    error.message
+                ).catch((e) =>
+                    logger.error(
+                        `[Acquisition/SpotiFLAC] Failed to update job status: ${e.message}`
+                    )
+                );
+            }
+            
+            return {
+                success: false,
+                error: error.message,
+            };
         }
     }
 

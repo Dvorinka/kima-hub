@@ -26,37 +26,43 @@ export class DiscoverySeeding {
     /**
      * Gets seed artists based on user's listening history.
      * Falls back to library artists when insufficient play history.
-     * Uses recency weighting: plays in last 2 weeks count 2x more.
+     * Uses exponential time decay: weight = exp(-days/120) so recent plays matter more.
      */
     async getSeedArtists(userId: string, seedCount?: number): Promise<SeedArtist[]> {
         const limit = seedCount ?? this.DEFAULT_SEED_COUNT;
-        const twoWeeksAgo = subWeeks(new Date(), 2);
-        const fourWeeksAgo = subWeeks(new Date(), 4);
+        const eightWeeksAgo = subWeeks(new Date(), 8);
 
-        // Get plays from last 4 weeks with recency weighting
-        const recentPlays = await prisma.play.groupBy({
-            by: ['trackId'],
+        // Get individual plays from last 8 weeks for per-play time decay
+        const recentPlays = await prisma.play.findMany({
             where: {
                 userId,
-                playedAt: { gte: fourWeeksAgo },
+                playedAt: { gte: eightWeeksAgo },
                 source: { in: ['LIBRARY', 'DISCOVERY_KEPT'] },
             },
-            _count: { id: true },
-            _max: { playedAt: true },
+            select: { trackId: true, playedAt: true },
+            orderBy: { playedAt: 'desc' },
         });
 
-        // Weight: plays in last 2 weeks count 2x
-        const weightedPlays = recentPlays
-            .map(play => {
-                const isRecent = play._max.playedAt && play._max.playedAt >= twoWeeksAgo;
-                const weight = isRecent ? 2 : 1;
-                return {
-                    trackId: play.trackId,
-                    weightedCount: play._count.id * weight,
-                    rawCount: play._count.id,
-                };
-            })
-            .filter(p => p.rawCount >= this.MIN_PLAYS_THRESHOLD) // Filter <5 plays
+        // Apply exponential time decay: weight = exp(-days/120)
+        // Recent plays get weight ~1.0, plays from 120 days ago get weight ~0.37
+        const now = new Date();
+        const trackWeights = new Map<string, { weighted: number; raw: number }>();
+        for (const play of recentPlays) {
+            const existing = trackWeights.get(play.trackId) || { weighted: 0, raw: 0 };
+            const daysSince = (now.getTime() - play.playedAt.getTime()) / (1000 * 60 * 60 * 24);
+            const decayWeight = Math.exp(-daysSince / 120);
+            existing.weighted += decayWeight;
+            existing.raw += 1;
+            trackWeights.set(play.trackId, existing);
+        }
+
+        const weightedPlays = Array.from(trackWeights.entries())
+            .map(([trackId, data]) => ({
+                trackId,
+                weightedCount: data.weighted,
+                rawCount: data.raw,
+            }))
+            .filter(p => p.rawCount >= this.MIN_PLAYS_THRESHOLD)
             .sort((a, b) => b.weightedCount - a.weightedCount)
             .slice(0, this.RECENT_PLAYS_LIMIT);
 

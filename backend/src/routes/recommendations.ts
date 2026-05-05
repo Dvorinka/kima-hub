@@ -3,6 +3,8 @@ import { logger } from "../utils/logger";
 import { requireAuthOrToken } from "../middleware/auth";
 import { prisma } from "../utils/db";
 import { lastFmService } from "../services/lastfm";
+import { findSimilarTracks, SimilarityOptions } from "../services/hybridSimilarity";
+import { getUserControls, shouldFilterTrack, getTasteProfile } from "../services/tasteProfile";
 
 const router = Router();
 
@@ -386,10 +388,11 @@ router.get("/albums", async (req, res) => {
     }
 });
 
-// GET /recommendations/tracks?seedTrackId=
+// GET /recommendations/tracks?seedTrackId=&limit=20&mode=hybrid
 router.get("/tracks", async (req, res) => {
     try {
-        const { seedTrackId } = req.query;
+        const { seedTrackId, limit = "20", mode = "hybrid" } = req.query;
+        const userId = req.user!.id;
 
         if (!seedTrackId) {
             return res.status(400).json({ error: "seedTrackId required" });
@@ -411,7 +414,48 @@ router.get("/tracks", async (req, res) => {
             return res.status(404).json({ error: "Track not found" });
         }
 
-        // Use Last.fm to get similar tracks
+        const limitNum = Math.min(Math.max(parseInt(limit as string, 10) || 20, 1), 100);
+
+        // Get user controls for filtering
+        const controls = await getUserControls(userId);
+
+        // Use hybrid similarity if mode is "hybrid" or "embedding"
+        if (mode === "hybrid" || mode === "embedding") {
+            const options: SimilarityOptions = {
+                limit: limitNum,
+                popularityMode: mode === "embedding" ? "discovery" : "balanced",
+                enableDiversity: true,
+                enableExploration: true,
+                excludedTrackIds: controls.excludedTrackIds,
+                excludedArtistIds: controls.excludedArtistIds,
+            };
+
+            const similarTracks = await findSimilarTracks(
+                seedTrackId as string,
+                limitNum,
+                options
+            );
+
+            // Get taste profile for additional context
+            const taste = await getTasteProfile(userId);
+
+            res.json({
+                seedTrack: {
+                    id: seedTrack.id,
+                    title: seedTrack.title,
+                    artist: seedTrack.album.artist.name,
+                    album: seedTrack.album.title,
+                },
+                tasteProfile: {
+                    confidence: taste.confidence,
+                    explorationReadiness: taste.explorationReadiness,
+                },
+                recommendations: similarTracks,
+            });
+            return;
+        }
+
+        // Fallback: Use Last.fm to get similar tracks
         const similarTracksFromLastFm = await lastFmService.getSimilarTracks(
             seedTrack.album.artist.name,
             seedTrack.title,
@@ -441,6 +485,12 @@ router.get("/tracks", async (req, res) => {
             const matched = matchIndex.get(key);
 
             if (matched) {
+                // Filter based on user controls
+                if (shouldFilterTrack(
+                    { id: matched.id, artistId: matched.album.artist.id, lastfmTags: [], essentiaGenres: [] },
+                    controls
+                )) return null;
+
                 return {
                     ...matched,
                     inLibrary: true,
@@ -454,7 +504,7 @@ router.get("/tracks", async (req, res) => {
                 similarity: lfmTrack.match || 0,
                 lastFmUrl: lfmTrack.url,
             };
-        });
+        }).filter(Boolean);
 
         res.json({
             seedTrack: {
