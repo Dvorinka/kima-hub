@@ -60,14 +60,27 @@ function parseSpotifyUrl(url: string): { type: "track" | "album" | "artist" | "p
 // GET /spotiflac/status - Check if SpotiFLAC is available
 router.get("/status", async (_req, res) => {
     try {
-        const isAvailable = await spotiflacService.isAvailable();
         const settings = await getSystemSettings();
+        const isEnabled = settings?.spotiflacEnabled ?? false;
+        
+        if (!isEnabled) {
+            return res.json({
+                available: false,
+                enabled: false,
+                zeroConfig: true,
+                sources: ["qobuz", "tidal"],
+                message: "SpotiFLAC is disabled in settings",
+            });
+        }
+        
+        const isAvailable = await spotiflacService.isAvailable();
         
         res.json({
             available: isAvailable,
-            enabled: settings?.spotiflacEnabled ?? false,
+            enabled: true,
             zeroConfig: true,
             sources: ["qobuz", "tidal"],
+            message: isAvailable ? "SpotiFLAC is available" : "SpotiFLAC initialization failed",
         });
     } catch (error: any) {
         logger.error("[SpotiFLAC] Status check error:", error);
@@ -108,6 +121,7 @@ router.post("/download/track", async (req, res) => {
         if (!isAvailable) {
             return res.status(400).json({
                 error: "SpotiFLAC is not available. Enable it in Settings → Downloads.",
+                details: "SpotiFLAC must be enabled in settings and initialization must succeed",
             });
         }
 
@@ -188,6 +202,7 @@ router.post("/download/album", async (req, res) => {
         if (!isAvailable) {
             return res.status(400).json({
                 error: "SpotiFLAC is not available. Enable it in Settings → Downloads.",
+                details: "SpotiFLAC must be enabled in settings and initialization must succeed",
             });
         }
 
@@ -273,6 +288,7 @@ router.post("/download/artist", async (req, res) => {
         if (!isAvailable) {
             return res.status(400).json({
                 error: "SpotiFLAC is not available. Enable it in Settings → Downloads.",
+                details: "SpotiFLAC must be enabled in settings and initialization must succeed",
             });
         }
 
@@ -353,6 +369,7 @@ router.post("/download/playlist", async (req, res) => {
         if (!isAvailable) {
             return res.status(400).json({
                 error: "SpotiFLAC is not available. Enable it in Settings → Downloads.",
+                details: "SpotiFLAC must be enabled in settings and initialization must succeed",
             });
         }
 
@@ -417,6 +434,7 @@ router.post("/download/batch", async (req, res) => {
         if (!isAvailable) {
             return res.status(400).json({
                 error: "SpotiFLAC is not available. Enable it in Settings → Downloads.",
+                details: "SpotiFLAC must be enabled in settings and initialization must succeed",
             });
         }
 
@@ -569,12 +587,12 @@ router.get("/search", async (req, res) => {
 
         const settings = await getSystemSettings();
         if (!settings?.spotiflacEnabled) {
-            return res.status(400).json({ error: "SpotiFLAC is not enabled" });
+            return res.status(400).json({ error: "SpotiFLAC is not enabled. Enable it in Settings → Downloads." });
         }
 
         const isAvailable = await spotiflacService.isAvailable();
         if (!isAvailable) {
-            return res.status(400).json({ error: "SpotiFLAC is not available" });
+            return res.status(400).json({ error: "SpotiFLAC initialization failed. Check logs for details." });
         }
 
         // Search by name: use the appropriate search method based on type

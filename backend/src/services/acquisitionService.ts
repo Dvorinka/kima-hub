@@ -130,7 +130,7 @@ class AcquisitionService {
             settings?.lidarrUrl &&
             settings?.lidarrApiKey
         );
-        const hasSpotiFLAC = settings?.spotiflacEnabled && await spotiflacService.isAvailable();
+        const hasSpotiFLAC = await spotiflacService.isAvailable();
 
         // Get available sources array
         const availableSources: ("soulseek" | "lidarr" | "spotiflac")[] = [];
@@ -327,7 +327,7 @@ class AcquisitionService {
             settings?.lidarrUrl &&
             settings?.lidarrApiKey
         );
-        const spotiflacAvailable = settings?.spotiflacEnabled && await spotiflacService.isAvailable();
+        const spotiflacAvailable = await spotiflacService.isAvailable();
 
         if (!soulseekAvailable && !lidarrAvailable && !spotiflacAvailable) {
             throw new ConfigurationError(
@@ -505,7 +505,7 @@ class AcquisitionService {
         }
 
         const soulseekAvailable = await soulseekService.isAvailable();
-        const spotiflacAvailable = settings?.spotiflacEnabled && await spotiflacService.isAvailable();
+        const spotiflacAvailable = await spotiflacService.isAvailable();
 
         if (!soulseekAvailable && !spotiflacAvailable) {
             logger.error(`[Acquisition] No download sources available for track downloads`);

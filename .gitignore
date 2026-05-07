@@ -187,3 +187,6 @@ soularr/
 
 # Claude Code internal task tracking
 .task/
+
+# Reference repositories (kept locally but not tracked)
+reference/

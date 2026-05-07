@@ -917,7 +917,9 @@ async function downloadAlbumByUPC(upc: string, opts: DLOptions = {}): Promise<Ba
 // ── EXPORTED SERVICE ──
 export const spotiflacService = {
     async isAvailable(): Promise<boolean> {
-        try { await spotifyClient.init(); return true; } catch { return false; }
+        const settings = await getSystemSettings();
+        if (!settings?.spotiflacEnabled) return false;
+        try { await spotifyClient.init(); return true; } catch (e: any) { logger.debug(`[SpotiFLAC] Availability check failed: ${e.message}`); return false; }
     },
 
     async downloadTrack(spotifyUrlOrId: string, opts: DLOptions = {}): Promise<{success:boolean;filePath?:string;error?:string;isrc?:string}> {
