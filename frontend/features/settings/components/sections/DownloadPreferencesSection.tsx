@@ -1,6 +1,6 @@
 "use client";
 
-import { SettingsSection, SettingsRow, SettingsSelect } from "../ui";
+import { SettingsSection, SettingsRow, SettingsSelect, SettingsToggle } from "../ui";
 import { SystemSettings } from "../../types";
 
 interface DownloadPreferencesSectionProps {
@@ -22,6 +22,8 @@ export function DownloadPreferencesSection({
         settings.soulseekUsername.trim() !== "" &&
         settings.soulseekPassword.trim() !== "";
 
+    const isSpotiFLACEnabled = settings.spotiflacEnabled === true;
+
     const areBothServicesConfigured = isLidarrConfigured && isSoulseekConfigured;
     const isDisabled = !areBothServicesConfigured;
 
@@ -31,11 +33,19 @@ export function DownloadPreferencesSection({
             return [
                 { value: "none", label: "Skip track" },
                 { value: "lidarr", label: "Download full album via Lidarr" },
+                ...(isSpotiFLACEnabled ? [{ value: "spotiflac", label: "Try SpotiFLAC (Lossless)" }] : []),
             ];
-        } else {
+        } else if (settings.downloadSource === "lidarr") {
             return [
                 { value: "none", label: "Skip album" },
                 { value: "soulseek", label: "Try Soulseek for individual tracks" },
+                ...(isSpotiFLACEnabled ? [{ value: "spotiflac", label: "Try SpotiFLAC (Lossless)" }] : []),
+            ];
+        } else {
+            return [
+                { value: "none", label: "Skip download" },
+                { value: "soulseek", label: "Try Soulseek" },
+                ...(isLidarrConfigured ? [{ value: "lidarr", label: "Try Lidarr" }] : []),
             ];
         }
     };
@@ -47,10 +57,28 @@ export function DownloadPreferencesSection({
             description="Configure how music is downloaded for playlists and discovery"
         >
             <SettingsRow
+                label="Enable SpotiFLAC"
+                description="Zero-configuration lossless music downloader from Spotify URLs (Qobuz/Tidal)"
+            >
+                <SettingsToggle
+                    checked={settings.spotiflacEnabled || false}
+                    onChange={(checked) =>
+                        onUpdate({
+                            spotiflacEnabled: checked,
+                            // Reset to soulseek if spotiflac was primary and is being disabled
+                            ...(settings.downloadSource === "spotiflac" && !checked
+                                ? { downloadSource: "soulseek" as const }
+                                : {}),
+                        })
+                    }
+                />
+            </SettingsRow>
+
+            <SettingsRow
                 label="Primary Download Source"
                 description={
-                    isDisabled
-                        ? "Requires both Soulseek and Lidarr to be configured"
+                    isDisabled && !isSpotiFLACEnabled
+                        ? "Requires Soulseek, Lidarr, or SpotiFLAC to be configured"
                         : "Choose how to download music for imported playlists"
                 }
             >
@@ -58,15 +86,16 @@ export function DownloadPreferencesSection({
                     value={settings.downloadSource || "soulseek"}
                     onChange={(v) =>
                         onUpdate({
-                            downloadSource: v as "soulseek" | "lidarr",
+                            downloadSource: v as "soulseek" | "lidarr" | "spotiflac",
                             primaryFailureFallback: "none"
                         })
                     }
                     options={[
                         { value: "soulseek", label: "Soulseek (Per-track)" },
                         { value: "lidarr", label: "Lidarr (Full albums)" },
+                        ...(isSpotiFLACEnabled ? [{ value: "spotiflac", label: "SpotiFLAC (Lossless)" }] : []),
                     ]}
-                    disabled={isDisabled}
+                    disabled={isDisabled && !isSpotiFLACEnabled}
                 />
             </SettingsRow>
 
@@ -74,25 +103,29 @@ export function DownloadPreferencesSection({
                 label={
                     settings.downloadSource === "soulseek"
                         ? "When Soulseek Fails"
-                        : "When Lidarr Fails"
+                        : settings.downloadSource === "lidarr"
+                        ? "When Lidarr Fails"
+                        : "When SpotiFLAC Fails"
                 }
                 description={
-                    isDisabled
-                        ? "Requires both Soulseek and Lidarr to be configured"
+                    isDisabled && !isSpotiFLACEnabled
+                        ? "Requires Soulseek, Lidarr, or SpotiFLAC to be configured"
                         : settings.downloadSource === "soulseek"
                         ? "What to do if a track can't be found on Soulseek"
-                        : "What to do if an album can't be found on Lidarr"
+                        : settings.downloadSource === "lidarr"
+                        ? "What to do if an album can't be found on Lidarr"
+                        : "What to do if a download fails on SpotiFLAC"
                 }
             >
                 <SettingsSelect
                     value={settings.primaryFailureFallback || "none"}
                     onChange={(v) =>
                         onUpdate({
-                            primaryFailureFallback: v as "none" | "lidarr" | "soulseek",
+                            primaryFailureFallback: v as "none" | "lidarr" | "soulseek" | "spotiflac",
                         })
                     }
                     options={getFallbackOptions()}
-                    disabled={isDisabled}
+                    disabled={isDisabled && !isSpotiFLACEnabled}
                 />
             </SettingsRow>
 

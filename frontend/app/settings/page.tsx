@@ -24,6 +24,7 @@ import { StoragePathsSection } from "@/features/settings/components/sections/Sto
 import { CacheSection } from "@/features/settings/components/sections/CacheSection";
 import { UserManagementSection } from "@/features/settings/components/sections/UserManagementSection";
 import { CorruptTracksSection } from "@/features/settings/components/sections/CorruptTracksSection";
+import { RecommendationSection } from "@/features/settings/components/sections/RecommendationSection";
 
 // Define sidebar items
 const sidebarItems: SidebarItem[] = [
@@ -35,6 +36,7 @@ const sidebarItems: SidebarItem[] = [
     { id: "audiobookshelf", label: "Media Servers", adminOnly: true },
     { id: "soulseek", label: "P2P Networks", adminOnly: true },
     { id: "ai-services", label: "Artwork", adminOnly: true },
+    { id: "recommendation-settings", label: "Recommendations", adminOnly: true },
     { id: "storage", label: "Storage", adminOnly: true },
     { id: "cache", label: "Cache & Automation", adminOnly: true },
     { id: "corrupt-tracks", label: "Corrupt Tracks", adminOnly: true },
@@ -185,6 +187,12 @@ export default function SettingsPage() {
                             onUpdate={updateSystemSettings}
                             onTest={handleTestService}
                             isTesting={testingServices.openai || testingServices.fanart || false}
+                        />
+
+                        {/* Recommendations */}
+                        <RecommendationSection
+                            settings={systemSettings}
+                            onUpdate={updateSystemSettings}
                         />
 
                         {/* Storage */}

@@ -134,6 +134,7 @@ router.get("/", async (req, res) => {
           transcodeCacheMaxGb: 10,
           soulseekConcurrentDownloads: 4,
           spotiflacEnabled: false,
+          recommendationMode: "balanced",
         },
       });
     }

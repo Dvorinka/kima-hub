@@ -1217,6 +1217,67 @@ class ApiClient {
         });
     }
 
+    // SpotiFLAC
+    async getSpotiFLACStatus() {
+        return this.request<{
+            available: boolean;
+            enabled: boolean;
+            zeroConfig: boolean;
+            sources: string[];
+            message: string;
+        }>("/spotiflac/status");
+    }
+
+    async downloadSpotiFLACTrack(spotifyUrl: string) {
+        return this.request<{ jobId: string; message: string }>("/spotiflac/download/track", {
+            method: "POST",
+            body: JSON.stringify({ spotifyUrl }),
+        });
+    }
+
+    async downloadSpotiFLACAlbum(spotifyUrl: string) {
+        return this.request<{ jobId: string; message: string }>("/spotiflac/download/album", {
+            method: "POST",
+            body: JSON.stringify({ spotifyUrl }),
+        });
+    }
+
+    async downloadSpotiFLACArtist(spotifyUrl: string) {
+        return this.request<{ jobId: string; message: string }>("/spotiflac/download/artist", {
+            method: "POST",
+            body: JSON.stringify({ spotifyUrl }),
+        });
+    }
+
+    async downloadSpotiFLACPlaylist(spotifyUrl: string) {
+        return this.request<{ jobId: string; message: string }>("/spotiflac/download/playlist", {
+            method: "POST",
+            body: JSON.stringify({ spotifyUrl }),
+        });
+    }
+
+    async downloadSpotiFLACByArtistAlbum(artistName: string, albumTitle: string) {
+        return this.request<{ jobId: string; message: string }>("/spotiflac/download/by-name", {
+            method: "POST",
+            body: JSON.stringify({ artistName, albumTitle }),
+        });
+    }
+
+    async getSpotiFLACJobs() {
+        return this.request<{ jobs: ApiData[] }>("/spotiflac/jobs");
+    }
+
+    async getSpotiFLACJob(jobId: string) {
+        return this.request<ApiData>(`/spotiflac/jobs/${jobId}`);
+    }
+
+    async searchSpotiFLAC(artistName: string, trackName?: string, albumName?: string) {
+        const params = new URLSearchParams({ artistName });
+        if (trackName) params.append("trackName", trackName);
+        if (albumName) params.append("albumName", albumName);
+        return this.request<ApiData>(`/spotiflac/search?${params.toString()}`);
+    }
+
     // Search
     async search(
         query: string,

@@ -5,6 +5,8 @@ import { prisma } from "../utils/db";
 import { lastFmService } from "../services/lastfm";
 import { findSimilarTracks, SimilarityOptions } from "../services/hybridSimilarity";
 import { getUserControls, shouldFilterTrack, getTasteProfile } from "../services/tasteProfile";
+import { recommendationService } from "../services/recommendationService";
+import { InteractionType } from "@prisma/client";
 
 const router = Router();
 
@@ -520,6 +522,151 @@ router.get("/tracks", async (req, res) => {
         res.status(500).json({
             error: "Failed to get track recommendations",
         });
+    }
+});
+
+// POST /recommendations/track-interaction
+router.post("/track-interaction", async (req, res) => {
+    try {
+        const { trackId, type, completedMs } = req.body;
+        const userId = req.user!.id;
+
+        if (!trackId || !type) {
+            return res.status(400).json({ error: "trackId and type are required" });
+        }
+
+        if (!Object.values(InteractionType).includes(type)) {
+            return res.status(400).json({ error: "Invalid interaction type" });
+        }
+
+        await recommendationService.trackInteraction(
+            userId,
+            trackId,
+            type as InteractionType,
+            completedMs
+        );
+
+        res.json({ success: true });
+    } catch (error) {
+        logger.error("Track interaction error:", error);
+        res.status(500).json({ error: "Failed to track interaction" });
+    }
+});
+
+// GET /recommendations/taste-profile
+router.get("/taste-profile", async (req, res) => {
+    try {
+        const userId = req.user!.id;
+        const tasteProfile = await recommendationService.getTasteProfile(userId);
+
+        if (!tasteProfile) {
+            return res.json({
+                genres: {},
+                artists: {},
+                audioFeatures: {
+                    energy: 0.5,
+                    valence: 0.5,
+                    danceability: 0.5,
+                    acousticness: 0.5,
+                },
+                confidence: 0,
+            });
+        }
+
+        res.json(tasteProfile);
+    } catch (error) {
+        logger.error("Get taste profile error:", error);
+        res.status(500).json({ error: "Failed to get taste profile" });
+    }
+});
+
+// GET /recommendations/settings
+router.get("/settings", async (req, res) => {
+    try {
+        const userId = req.user!.id;
+        const settings = await recommendationService.getRecommendationSettings(userId);
+        res.json(settings);
+    } catch (error) {
+        logger.error("Get recommendation settings error:", error);
+        res.status(500).json({ error: "Failed to get recommendation settings" });
+    }
+});
+
+// PUT /recommendations/settings
+router.put("/settings", async (req, res) => {
+    try {
+        const userId = req.user!.id;
+        const { excludedArtists, excludedGenres } = req.body;
+
+        const controls = await prisma.userRecControls.findUnique({
+            where: { userId },
+        });
+
+        if (controls) {
+            await prisma.userRecControls.update({
+                where: { userId },
+                data: {
+                    excludedArtistIds: excludedArtists || [],
+                    excludedGenres: excludedGenres || [],
+                },
+            });
+        } else {
+            await prisma.userRecControls.create({
+                data: {
+                    userId,
+                    excludedArtistIds: excludedArtists || [],
+                    excludedGenres: excludedGenres || [],
+                },
+            });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        logger.error("Update recommendation settings error:", error);
+        res.status(500).json({ error: "Failed to update recommendation settings" });
+    }
+});
+
+// GET /recommendations/generate?limit=20
+router.get("/generate", async (req, res) => {
+    try {
+        const { limit = "20" } = req.query;
+        const userId = req.user!.id;
+        const limitNum = parseInt(limit as string, 10);
+
+        const recommendations = await recommendationService.generateRecommendations(
+            userId,
+            limitNum
+        );
+
+        // Get full track details for recommendations
+        const trackIds = recommendations.map((r) => r.trackId);
+        const tracks = await prisma.track.findMany({
+            where: { id: { in: trackIds } },
+            include: {
+                album: {
+                    include: { artist: true },
+                },
+            },
+        });
+
+        const trackMap = new Map(tracks.map((t) => [t.id, t]));
+
+        const enrichedRecommendations = recommendations.map((rec) => {
+            const track = trackMap.get(rec.trackId);
+            if (!track) return null;
+
+            return {
+                ...track,
+                recommendationScore: rec.score,
+                recommendationReason: rec.reason,
+            };
+        }).filter(Boolean);
+
+        res.json(enrichedRecommendations);
+    } catch (error) {
+        logger.error("Generate recommendations error:", error);
+        res.status(500).json({ error: "Failed to generate recommendations" });
     }
 });
 

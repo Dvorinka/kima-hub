@@ -34,6 +34,8 @@ export interface SystemSettings {
     // Spotify (for playlist import)
     spotifyClientId: string;
     spotifyClientSecret: string;
+    // SpotiFLAC (zero-config lossless downloader)
+    spotiflacEnabled: boolean;
     // Storage
     musicPath: string;
     downloadPath: string;
@@ -45,8 +47,12 @@ export interface SystemSettings {
     audioAnalyzerWorkers: number;
     soulseekConcurrentDownloads: number;
     // Download Preferences
-    downloadSource: "soulseek" | "lidarr";
-    primaryFailureFallback: "none" | "lidarr" | "soulseek";
+    downloadSource: "soulseek" | "lidarr" | "spotiflac";
+    primaryFailureFallback: "none" | "lidarr" | "soulseek" | "spotiflac";
+    // Recommendations
+    recommendationMode: "comfort" | "discovery" | "balanced";
+    excludedArtists: string[];
+    excludedGenres: string[];
     // Server
     publicUrl: string;
 }

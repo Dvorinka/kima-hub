@@ -603,6 +603,7 @@ model SystemSettings {
   lidarrQualityProfileId      Int?
   lidarrMetadataProfileId     Int?
   spotiflacEnabled            Boolean  @default(false)
+  recommendationMode          String   @default("balanced")
 }
 
 model Track {
